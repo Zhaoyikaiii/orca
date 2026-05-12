@@ -235,6 +235,8 @@ function SourceControlInner(): React.JSX.Element {
   const inFlightRemoteOpKind = useAppStore((s) => s.inFlightRemoteOpKind)
   const hostedReviewCache = useAppStore((s) => s.hostedReviewCache)
   const fetchHostedReviewForBranch = useAppStore((s) => s.fetchHostedReviewForBranch)
+  const prCache = useAppStore((s) => s.prCache)
+  const enqueueGitHubPRRefresh = useAppStore((s) => s.enqueueGitHubPRRefresh)
   const updateRepo = useAppStore((s) => s.updateRepo)
   const setGitStatus = useAppStore((s) => s.setGitStatus)
   const updateWorktreeGitIdentity = useAppStore((s) => s.updateWorktreeGitIdentity)
@@ -437,14 +439,24 @@ function SourceControlInner(): React.JSX.Element {
 
   const branchName = activeWorktree?.branch.replace(/^refs\/heads\//, '') ?? 'HEAD'
   const hostedReviewCacheKey = activeRepo && branchName ? `${activeRepo.path}::${branchName}` : null
-  const hostedReview: HostedReviewInfo | null = hostedReviewCacheKey
-    ? (hostedReviewCache[hostedReviewCacheKey]?.data ?? null)
-    : null
+  const activePrFromQueue = hostedReviewCacheKey ? (prCache[hostedReviewCacheKey]?.data ?? null) : null
+  const hostedReview: HostedReviewInfo | null = activePrFromQueue
+    ? { provider: 'github', ...activePrFromQueue, status: activePrFromQueue.checksStatus }
+    : hostedReviewCacheKey
+      ? (hostedReviewCache[hostedReviewCacheKey]?.data ?? null)
+      : null
 
   const linkedGitHubPR = activeWorktree?.linkedPR ?? null
   const linkedGitLabMR = activeWorktree?.linkedGitLabMR ?? null
   useEffect(() => {
-    if (!isBranchVisible || !activeRepo || isFolder || !branchName || branchName === 'HEAD') {
+    if (
+      !isBranchVisible ||
+      !activeRepo ||
+      isFolder ||
+      !branchName ||
+      branchName === 'HEAD' ||
+      !activeWorktreeId
+    ) {
       return
     }
     if (activeRepo.connectionId) {
@@ -457,9 +469,14 @@ function SourceControlInner(): React.JSX.Element {
     // to reselect the worktree. The linked ids handle create-from-review
     // worktrees whose local branch differs from the remote head branch.
     void fetchHostedReviewForBranch(activeRepo.path, branchName, { linkedGitHubPR, linkedGitLabMR })
+    // Why: the GitHub-specific cache powers grouping/check panels; keep that
+    // refresh behind the coordinator so Source Control does not bypass pacing.
+    enqueueGitHubPRRefresh(activeWorktreeId, 'swr', 30)
   }, [
     activeRepo,
+    activeWorktreeId,
     branchName,
+    enqueueGitHubPRRefresh,
     fetchHostedReviewForBranch,
     isBranchVisible,
     isFolder,
