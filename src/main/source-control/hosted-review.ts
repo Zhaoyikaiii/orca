@@ -62,6 +62,7 @@ function mapBitbucketReview(pr: BitbucketPullRequestInfo): HostedReviewInfo {
 
 export async function getHostedReviewForBranch(input: {
   repoPath: string
+  connectionId?: string | null
   branch: string
   linkedGitHubPR?: number | null
   linkedGitLabMR?: number | null
@@ -88,9 +89,14 @@ export async function getHostedReviewForBranch(input: {
     return mr ? mapGitLabReview(mr) : null
   }
 
-  const githubRepo = await getRepoSlug(input.repoPath)
+  const githubRepo = await getRepoSlug(input.repoPath, input.connectionId)
   if (githubRepo) {
-    const pr = await getPRForBranch(input.repoPath, branchName, input.linkedGitHubPR ?? null)
+    const pr = await getPRForBranch(
+      input.repoPath,
+      branchName,
+      input.linkedGitHubPR ?? null,
+      input.connectionId
+    )
     return pr ? mapGitHubReview(pr) : null
   }
 
