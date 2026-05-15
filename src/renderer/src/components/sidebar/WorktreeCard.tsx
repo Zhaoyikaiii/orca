@@ -12,7 +12,8 @@ import {
   CircleCheck,
   CircleX,
   Server,
-  ServerOff
+  ServerOff,
+  Workflow
 } from 'lucide-react'
 import StatusIndicator from './StatusIndicator'
 import CacheTimer from './CacheTimer'
@@ -52,6 +53,9 @@ type WorktreeCardProps = {
   isMultiSelected?: boolean
   selectedWorktrees?: readonly Worktree[]
   hideRepoBadge?: boolean
+  depth?: 'child'
+  parentLabel?: string
+  lineageState?: 'valid' | 'missing'
   onSelectionGesture?: (event: React.MouseEvent<HTMLDivElement>, worktreeId: string) => boolean
   onContextMenuSelect?: (event: React.MouseEvent<HTMLDivElement>) => readonly Worktree[]
 }
@@ -69,7 +73,10 @@ const WorktreeCard = React.memo(function WorktreeCard({
   selectedWorktrees,
   onSelectionGesture,
   onContextMenuSelect,
-  hideRepoBadge
+  hideRepoBadge,
+  depth,
+  parentLabel,
+  lineageState
 }: WorktreeCardProps) {
   const openModal = useAppStore((s) => s.openModal)
   const updateWorktreeMeta = useAppStore((s) => s.updateWorktreeMeta)
@@ -437,6 +444,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
     <div
       className={cn(
         'group relative flex items-start gap-1.5 px-2 py-2 cursor-pointer transition-all duration-200 outline-none select-none ml-1',
+        depth === 'child' && 'ml-5 border-l border-sidebar-border/70 rounded-l-sm',
         isMultiSelected ? 'rounded-sm' : 'rounded-lg',
         isActive
           ? 'bg-black/[0.08] shadow-[0_1px_2px_rgba(0,0,0,0.04)] border border-black/[0.015] dark:bg-white/[0.10] dark:border-border/40 dark:shadow-[0_1px_2px_rgba(0,0,0,0.03)]'
@@ -646,6 +654,23 @@ const WorktreeCard = React.memo(function WorktreeCard({
           )}
 
           <CacheTimer worktreeId={worktree.id} />
+
+          {parentLabel && (
+            <Badge
+              variant="outline"
+              className={cn(
+                'h-[16px] px-1.5 text-[10px] font-medium rounded shrink-0 gap-1 leading-none',
+                lineageState === 'missing'
+                  ? 'text-muted-foreground border-border bg-muted/40'
+                  : 'text-muted-foreground border-border bg-accent/50'
+              )}
+            >
+              <Workflow className="size-2.5" />
+              <span className="max-w-[7rem] truncate">
+                {lineageState === 'missing' ? 'Missing parent' : `from ${parentLabel}`}
+              </span>
+            </Badge>
+          )}
         </div>
 
         {/* Meta section: Issue / hosted review / Comment

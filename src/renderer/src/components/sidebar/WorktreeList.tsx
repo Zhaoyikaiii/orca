@@ -13,7 +13,7 @@ import WorktreeCard from './WorktreeCard'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import type { Worktree, Repo } from '../../../../shared/types'
+import type { Worktree, Repo, WorktreeLineage } from '../../../../shared/types'
 import { isGitRepoKind } from '../../../../shared/repo-kind'
 import { buildWorktreeComparator } from './smart-sort'
 import {
@@ -80,6 +80,7 @@ type VirtualizedWorktreeViewportProps = {
   rows: Row[]
   activeWorktreeId: string | null
   groupBy: 'none' | 'repo' | 'pr-status'
+  showWorkspaceLineage: boolean
   toggleGroup: (key: string) => void
   collapsedGroups: Set<string>
   handleCreateForRepo: (repoId: string) => void
@@ -95,6 +96,8 @@ type VirtualizedWorktreeViewportProps = {
     worktree: Worktree
   ) => readonly Worktree[]
   repoMap: Map<string, Repo>
+  worktreeMap: Map<string, Worktree>
+  worktreeLineageById: Record<string, WorktreeLineage>
   repoOrder: Map<string, number>
   // The full canonical state.repos id ordering — the drag controller commits
   // permutations of this list, even when some repos aren't currently visible
@@ -116,6 +119,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   rows,
   activeWorktreeId,
   groupBy,
+  showWorkspaceLineage,
   toggleGroup,
   collapsedGroups,
   handleCreateForRepo,
@@ -128,6 +132,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   onSelectionGesture,
   onContextMenuSelect,
   repoMap,
+  worktreeMap,
+  worktreeLineageById,
   repoOrder,
   allRepoIds,
   reorderRepos,
@@ -267,6 +273,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     worktrees,
     repoMap,
     prCache,
+    worktreeLineageById,
+    worktreeMap,
     rows,
     virtualizer,
     clearPendingRevealWorktreeId,
@@ -300,7 +308,10 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         repoMap,
         prCache,
         new Set<string>(),
-        repoOrder
+        repoOrder,
+        worktreeLineageById,
+        worktreeMap,
+        showWorkspaceLineage
       ).filter((r): r is Extract<Row, { type: 'item' }> => r.type === 'item')
       if (worktreeRows.length === 0) {
         return
@@ -333,7 +344,19 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         virtualizer.scrollToIndex(rowIndex, { align: 'auto' })
       }
     },
-    [rows, activeWorktreeId, virtualizer, groupBy, worktrees, repoMap, prCache, repoOrder]
+    [
+      rows,
+      activeWorktreeId,
+      virtualizer,
+      groupBy,
+      worktrees,
+      repoMap,
+      prCache,
+      repoOrder,
+      worktreeLineageById,
+      worktreeMap,
+      showWorkspaceLineage
+    ]
   )
 
   useEffect(() => {
@@ -493,7 +516,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     />
                   </div>
 
-                  {row.repo ? (
+                  {row.repo && groupBy === 'repo' ? (
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
@@ -547,6 +570,9 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                 onSelectionGesture={onSelectionGesture}
                 onContextMenuSelect={(event) => onContextMenuSelect(event, row.worktree)}
                 hideRepoBadge={groupBy === 'repo'}
+                depth={row.depth}
+                parentLabel={row.parentLabel}
+                lineageState={row.lineageState}
               />
             </div>
           )
@@ -564,9 +590,11 @@ const WorktreeList = React.memo(function WorktreeList() {
   const allWorktrees = useAllWorktrees()
   const repoMap = useRepoMap()
   const worktreeMap = useWorktreeMap()
+  const worktreeLineageById = useAppStore((s) => s.worktreeLineageById)
   const worktreesByRepo = useAppStore((s) => s.worktreesByRepo)
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const groupBy = useAppStore((s) => s.groupBy)
+  const showWorkspaceLineage = useAppStore((s) => s.showWorkspaceLineage)
   const sortBy = useAppStore((s) => s.sortBy)
   const showActiveOnly = useAppStore((s) => s.showActiveOnly)
   const hideDefaultBranchWorkspace = useAppStore((s) => s.hideDefaultBranchWorkspace)
@@ -872,8 +900,29 @@ const WorktreeList = React.memo(function WorktreeList() {
 
   // Build flat row list for rendering
   const rows: Row[] = useMemo(
-    () => buildRows(groupBy, worktrees, repoMap, prCache, collapsedGroups, repoOrder),
-    [groupBy, worktrees, repoMap, prCache, collapsedGroups, repoOrder]
+    () =>
+      buildRows(
+        groupBy,
+        worktrees,
+        repoMap,
+        prCache,
+        collapsedGroups,
+        repoOrder,
+        worktreeLineageById,
+        worktreeMap,
+        showWorkspaceLineage
+      ),
+    [
+      groupBy,
+      worktrees,
+      repoMap,
+      prCache,
+      collapsedGroups,
+      repoOrder,
+      worktreeLineageById,
+      worktreeMap,
+      showWorkspaceLineage
+    ]
   )
   // Why: rows.length alone can stay the same when items migrate between
   // groups (e.g., PR cache loads on restart and a collapsed group absorbs
@@ -1054,6 +1103,7 @@ const WorktreeList = React.memo(function WorktreeList() {
       rows={rows}
       activeWorktreeId={selectedSidebarWorktreeId}
       groupBy={groupBy}
+      showWorkspaceLineage={showWorkspaceLineage}
       toggleGroup={toggleGroup}
       collapsedGroups={collapsedGroups}
       handleCreateForRepo={handleCreateForRepo}
@@ -1066,6 +1116,8 @@ const WorktreeList = React.memo(function WorktreeList() {
       onSelectionGesture={updateSelectionForGesture}
       onContextMenuSelect={selectForContextMenu}
       repoMap={repoMap}
+      worktreeMap={worktreeMap}
+      worktreeLineageById={worktreeLineageById}
       repoOrder={repoOrder}
       allRepoIds={allRepoIds}
       reorderRepos={(orderedIds) => {

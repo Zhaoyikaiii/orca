@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Why: sidebar row construction keeps every grouping mode in one pure module so reveal, virtualized rendering, and tests share the same flat row contract. */
 import {
   CircleCheckBig,
   CircleDot,
@@ -8,7 +9,7 @@ import {
   Pin
 } from 'lucide-react'
 import type React from 'react'
-import type { Repo, Worktree } from '../../../../shared/types'
+import type { Repo, Worktree, WorktreeLineage } from '../../../../shared/types'
 import { branchName } from '@/lib/git-utils'
 
 export { branchName }
@@ -23,7 +24,14 @@ export type GroupHeaderRow = {
   repo?: Repo
 }
 
-export type WorktreeRow = { type: 'item'; worktree: Worktree; repo: Repo | undefined }
+export type WorktreeRow = {
+  type: 'item'
+  worktree: Worktree
+  repo: Repo | undefined
+  depth?: 'child'
+  parentLabel?: string
+  lineageState?: 'valid' | 'missing'
+}
 export type Row = GroupHeaderRow | WorktreeRow
 
 export type PRGroupKey = 'done' | 'in-review' | 'in-progress' | 'closed'
@@ -81,6 +89,35 @@ export const ALL_GROUP_META = {
   icon: LayoutList
 } as const
 
+export const MISSING_PARENT_GROUP_META = {
+  label: 'Missing parent'
+} as const
+
+export type LineageRenderInfo =
+  | { state: 'none' }
+  | { state: 'valid'; lineage: WorktreeLineage; parent: Worktree }
+  | { state: 'missing'; lineage: WorktreeLineage }
+
+export function getLineageRenderInfo(
+  worktree: Worktree,
+  lineageById: Record<string, WorktreeLineage>,
+  worktreeMap: Map<string, Worktree>
+): LineageRenderInfo {
+  const lineage = lineageById[worktree.id]
+  if (!lineage) {
+    return { state: 'none' }
+  }
+  const parent = worktreeMap.get(lineage.parentWorktreeId)
+  if (
+    !parent ||
+    worktree.instanceId !== lineage.worktreeInstanceId ||
+    parent.instanceId !== lineage.parentWorktreeInstanceId
+  ) {
+    return { state: 'missing', lineage }
+  }
+  return { state: 'valid', lineage, parent }
+}
+
 export function getPRGroupKey(
   worktree: Worktree,
   repoMap: Map<string, Repo>,
@@ -117,8 +154,11 @@ export function getPRGroupKey(
 function emitPinnedGroup(
   worktrees: Worktree[],
   repoMap: Map<string, Repo>,
+  lineageById: Record<string, WorktreeLineage>,
+  worktreeMap: Map<string, Worktree>,
   collapsedGroups: Set<string>,
-  result: Row[]
+  result: Row[],
+  showLineageContext: boolean
 ): Set<string> {
   const pinned = worktrees.filter((w) => w.isPinned)
   if (pinned.length === 0) {
@@ -134,11 +174,87 @@ function emitPinnedGroup(
     icon: PINNED_GROUP_META.icon
   })
   if (!collapsedGroups.has(PINNED_GROUP_KEY)) {
-    for (const w of pinned) {
-      result.push({ type: 'item', worktree: w, repo: repoMap.get(w.repoId) })
-    }
+    appendWorktreeRows(result, pinned, repoMap, lineageById, worktreeMap, {
+      nestLineage: false,
+      showLineageContext
+    })
   }
   return new Set(pinned.map((w) => w.id))
+}
+
+function buildWorktreeRow(
+  worktree: Worktree,
+  repoMap: Map<string, Repo>,
+  lineageById: Record<string, WorktreeLineage>,
+  worktreeMap: Map<string, Worktree>,
+  showLineageContext: boolean,
+  depth?: 'child'
+): WorktreeRow {
+  const lineage = showLineageContext
+    ? getLineageRenderInfo(worktree, lineageById, worktreeMap)
+    : { state: 'none' as const }
+  return {
+    type: 'item',
+    worktree,
+    repo: repoMap.get(worktree.repoId),
+    ...(depth ? { depth } : {}),
+    ...(lineage.state === 'valid'
+      ? { parentLabel: lineage.parent.displayName, lineageState: 'valid' as const }
+      : lineage.state === 'missing'
+        ? { parentLabel: MISSING_PARENT_GROUP_META.label, lineageState: 'missing' as const }
+        : {})
+  }
+}
+
+function appendWorktreeRows(
+  result: Row[],
+  worktrees: Worktree[],
+  repoMap: Map<string, Repo>,
+  lineageById: Record<string, WorktreeLineage>,
+  worktreeMap: Map<string, Worktree>,
+  options: { nestLineage: boolean; showLineageContext: boolean }
+): void {
+  const { nestLineage, showLineageContext } = options
+  if (!nestLineage) {
+    for (const worktree of worktrees) {
+      result.push(buildWorktreeRow(worktree, repoMap, lineageById, worktreeMap, showLineageContext))
+    }
+    return
+  }
+
+  const visibleIds = new Set(worktrees.map((worktree) => worktree.id))
+  const childrenByParentId = new Map<string, Worktree[]>()
+  const childIds = new Set<string>()
+  for (const worktree of worktrees) {
+    const lineage = getLineageRenderInfo(worktree, lineageById, worktreeMap)
+    if (lineage.state !== 'valid' || !visibleIds.has(lineage.parent.id)) {
+      continue
+    }
+    childIds.add(worktree.id)
+    const children = childrenByParentId.get(lineage.parent.id) ?? []
+    children.push(worktree)
+    childrenByParentId.set(lineage.parent.id, children)
+  }
+
+  const emitted = new Set<string>()
+  const emit = (worktree: Worktree, depth?: 'child'): void => {
+    if (emitted.has(worktree.id)) {
+      return
+    }
+    emitted.add(worktree.id)
+    result.push(
+      buildWorktreeRow(worktree, repoMap, lineageById, worktreeMap, showLineageContext, depth)
+    )
+    for (const child of childrenByParentId.get(worktree.id) ?? []) {
+      emit(child, 'child')
+    }
+  }
+
+  for (const worktree of worktrees) {
+    if (!childIds.has(worktree.id)) {
+      emit(worktree)
+    }
+  }
 }
 
 /**
@@ -151,11 +267,24 @@ export function buildRows(
   repoMap: Map<string, Repo>,
   prCache: Record<string, unknown> | null,
   collapsedGroups: Set<string>,
-  repoOrder?: Map<string, number>
+  repoOrder?: Map<string, number>,
+  lineageById: Record<string, WorktreeLineage> = {},
+  worktreeMap: Map<string, Worktree> = new Map(
+    worktrees.map((worktree) => [worktree.id, worktree])
+  ),
+  nestLineage = false
 ): Row[] {
   const result: Row[] = []
 
-  const pinnedIds = emitPinnedGroup(worktrees, repoMap, collapsedGroups, result)
+  const pinnedIds = emitPinnedGroup(
+    worktrees,
+    repoMap,
+    lineageById,
+    worktreeMap,
+    collapsedGroups,
+    result,
+    nestLineage
+  )
   const unpinned = pinnedIds.size > 0 ? worktrees.filter((w) => !pinnedIds.has(w.id)) : worktrees
 
   if (groupBy === 'none') {
@@ -175,9 +304,10 @@ export function buildRows(
         return result
       }
     }
-    for (const w of unpinned) {
-      result.push({ type: 'item', worktree: w, repo: repoMap.get(w.repoId) })
-    }
+    appendWorktreeRows(result, unpinned, repoMap, lineageById, worktreeMap, {
+      nestLineage,
+      showLineageContext: nestLineage
+    })
     return result
   }
 
@@ -264,9 +394,10 @@ export function buildRows(
 
     result.push(header)
     if (!isCollapsed) {
-      for (const w of group.items) {
-        result.push({ type: 'item', worktree: w, repo: repoMap.get(w.repoId) })
-      }
+      appendWorktreeRows(result, group.items, repoMap, lineageById, worktreeMap, {
+        nestLineage,
+        showLineageContext: nestLineage
+      })
     }
   }
 

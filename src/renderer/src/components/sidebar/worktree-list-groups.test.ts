@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { buildRows, getPRGroupKey } from './worktree-list-groups'
-import type { Repo, Worktree } from '../../../../shared/types'
+import { buildRows, getLineageRenderInfo, getPRGroupKey } from './worktree-list-groups'
+import type { Repo, Worktree, WorktreeLineage } from '../../../../shared/types'
 
 const repo: Repo = {
   id: 'repo-1',
@@ -168,6 +168,141 @@ describe('buildRows repo grouping order', () => {
     const rows = buildRows('repo', [wC, wA, wB], map, null, new Set(), repoOrder)
     const headerKeys = rows.filter((r) => r.type === 'header').map((r) => r.key)
     expect(headerKeys).toEqual(['repo:repo-b', 'repo:repo-a', 'repo:repo-c'])
+  })
+})
+
+describe('buildRows workspace lineage nesting', () => {
+  const parent: Worktree = {
+    ...worktree,
+    id: 'wt-parent',
+    instanceId: 'parent-instance',
+    displayName: 'coordinator'
+  }
+  const child: Worktree = {
+    ...worktree,
+    id: 'wt-child',
+    instanceId: 'child-instance',
+    displayName: 'worker'
+  }
+  const lineage: WorktreeLineage = {
+    worktreeId: child.id,
+    worktreeInstanceId: 'child-instance',
+    parentWorktreeId: parent.id,
+    parentWorktreeInstanceId: 'parent-instance',
+    origin: 'cli',
+    capture: { source: 'terminal-context', confidence: 'inferred' },
+    createdAt: 1
+  }
+
+  it('keeps lineage flat when nesting is off', () => {
+    const rows = buildRows(
+      'none',
+      [child, parent],
+      repoMap,
+      null,
+      new Set(),
+      undefined,
+      { [child.id]: lineage },
+      new Map([
+        [parent.id, parent],
+        [child.id, child]
+      ])
+    )
+
+    expect(rows[0]).toMatchObject({ type: 'item', worktree: { id: child.id } })
+    expect(rows[0]).not.toHaveProperty('parentLabel')
+    expect(rows[1]).toMatchObject({
+      type: 'item',
+      worktree: { id: parent.id }
+    })
+  })
+
+  it('places children directly under their parent when nesting is on', () => {
+    const rows = buildRows(
+      'none',
+      [child, parent],
+      repoMap,
+      null,
+      new Set(),
+      undefined,
+      { [child.id]: lineage },
+      new Map([
+        [parent.id, parent],
+        [child.id, child]
+      ]),
+      true
+    )
+
+    expect(rows[0]).toMatchObject({ type: 'item', worktree: { id: parent.id } })
+    expect(rows[1]).toMatchObject({
+      type: 'item',
+      worktree: { id: child.id },
+      depth: 'child',
+      parentLabel: 'coordinator'
+    })
+  })
+
+  it('marks stale instance links as missing without creating a parent group', () => {
+    const staleLineage = { ...lineage, parentWorktreeInstanceId: 'old-parent-instance' }
+    const rows = buildRows(
+      'none',
+      [child],
+      repoMap,
+      null,
+      new Set(),
+      undefined,
+      { [child.id]: staleLineage },
+      new Map([
+        [parent.id, parent],
+        [child.id, child]
+      ]),
+      true
+    )
+
+    expect(rows[0]).toMatchObject({
+      type: 'item',
+      worktree: { id: child.id },
+      lineageState: 'missing'
+    })
+  })
+
+  it('marks stale instance links as missing for shared context-menu validation', () => {
+    const staleLineage = { ...lineage, parentWorktreeInstanceId: 'old-parent-instance' }
+    const info = getLineageRenderInfo(
+      child,
+      { [child.id]: staleLineage },
+      new Map([
+        [parent.id, parent],
+        [child.id, child]
+      ])
+    )
+
+    expect(info).toMatchObject({ state: 'missing' })
+  })
+
+  it('keeps pinned children in Pinned with parent context', () => {
+    const pinnedChild = { ...child, isPinned: true }
+    const rows = buildRows(
+      'none',
+      [parent, pinnedChild],
+      repoMap,
+      null,
+      new Set(),
+      undefined,
+      { [child.id]: lineage },
+      new Map([
+        [parent.id, parent],
+        [child.id, pinnedChild]
+      ]),
+      true
+    )
+
+    expect(rows[0]).toMatchObject({ type: 'header', key: 'pinned' })
+    expect(rows[1]).toMatchObject({
+      type: 'item',
+      worktree: { id: child.id },
+      parentLabel: 'coordinator'
+    })
   })
 })
 
